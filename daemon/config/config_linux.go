@@ -82,7 +82,7 @@ type Config struct {
     SecureMode bool   `json:"secure-mode,omitempty"`
 }
 
-func (conf *Config) GetSecureMode() {
+func (conf *Config) GetSecureMode() bool {
     return conf.SecureMode
 }
 

@@ -17,6 +17,7 @@ func installCommonConfigFlags(conf *config.Config, flags *pflag.FlagSet) error {
 	flags.Var(allowNonDistributable, "allow-nondistributable-artifacts", "Allow push of nondistributable artifacts to registry")
 	flags.Var(registryMirrors, "registry-mirror", "Preferred Docker registry mirror")
 	flags.Var(insecureRegistries, "insecure-registry", "Enable insecure registry communication")
+    flags.BoolVar(&conf.SecureMode, "secure-mode", false, "start daemon in secure mode")
 
 	flags.Var(opts.NewNamedListOptsRef("storage-opts", &conf.GraphOptions, nil), "storage-opt", "Storage driver options")
 	flags.Var(opts.NewNamedListOptsRef("authorization-plugins", &conf.AuthorizationPlugins, nil), "authorization-plugin", "Authorization plugins to load")
