@@ -191,11 +191,12 @@ func getBlkioWeightDevices(config containertypes.Resources) ([]specs.LinuxWeight
 }
 
 func (daemon *Daemon) parseSecurityOpt(container *container.Container, hostConfig *containertypes.HostConfig) error {
-	container.NoNewPrivileges = daemon.configStore.NoNewPrivileges
-	return parseSecurityOpt(container, hostConfig)
+    secureMode := daemon.configStore.SecureMode
+	container.NoNewPrivileges = daemon.configStore.NoNewPrivileges || secureMode
+	return parseSecurityOpt(container, hostConfig, secureMode)
 }
 
-func parseSecurityOpt(container *container.Container, config *containertypes.HostConfig) error {
+func parseSecurityOpt(container *container.Container, config *containertypes.HostConfig, secureMode bool) error {
 	var (
 		labelOpts []string
 		err       error
@@ -227,8 +228,15 @@ func parseSecurityOpt(container *container.Container, config *containertypes.Hos
 		case "label":
 			labelOpts = append(labelOpts, v)
 		case "apparmor":
+            fmt.Println("Am I in SecureMode?? ", secureMode)
+            if secureMode {
+                return fmt.Errorf("Cannot update apparmor profile in secure mode")
+            }
 			container.AppArmorProfile = v
 		case "seccomp":
+            if secureMode {
+                return fmt.Errorf("Cannot update seccomp profile in secure mode")
+            }
 			container.SeccompProfile = v
 		case "no-new-privileges":
 			noNewPrivileges, err := strconv.ParseBool(v)
