@@ -79,6 +79,11 @@ type Config struct {
 	// ResolvConf is the path to the configuration of the host resolver
 	ResolvConf string `json:"resolv-conf,omitempty"`
 	Rootless   bool   `json:"rootless,omitempty"`
+    SecureMode bool   `json:"secure-mode,omitempty"`
+}
+
+func (conf *Config) GetSecureMode() {
+    return conf.SecureMode
 }
 
 // GetRuntime returns the runtime path and arguments for a given
