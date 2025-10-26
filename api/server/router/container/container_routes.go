@@ -553,6 +553,36 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 		}
 		return err
 	}
+
+	if hostConfig == nil {
+	    hostConfig = &container.HostConfig{}
+	    logrus.Info("initialized empty HostConfig")
+	}
+
+	if cred, ok := r.Context().Value(ctxkey.PeerCredKey).(*ctxkey.PeerCred); ok && cred != nil {
+		logrus.WithFields(logrus.Fields{
+			"pid": cred.PID,
+			"uid": cred.UID,
+			"gid": cred.GID,
+		}).Debug("retrieved peer credentials from context")
+
+		if parent, err := deriveParentFromProc("syetemd", cred); err == nil {
+			hostConfig.CgroupParent = parent
+			logrus.WithFields(logrus.Fields{
+				"pid":           cred.PID,
+				"cgroup_parent": parent,
+			}).Info("set HostConfig.CgroupParent from deriveParentFromProc")
+		} else {
+			logrus.WithError(err).WithField("pid", cred.PID).Warn("deriveParentFromProc failed")
+		}
+	} else {
+		logrus.WithFields(logrus.Fields{
+			"hasCred":    ok && cred != nil,
+			"alreadySet": hostConfig != nil && hostConfig.CgroupParent != "",
+		}).Error("create: skipping cgroup-parent injection")
+	}
+
+
 	version := httputils.VersionFromContext(ctx)
 	adjustCPUShares := versions.LessThan(version, "1.19")
 
