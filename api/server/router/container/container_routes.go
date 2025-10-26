@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"strings"
+	"os"
 
 	"github.com/containerd/containerd/platforms"
 	"github.com/docker/docker/api/server/httpstatus"
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/pkg/ctxkey"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -473,6 +476,65 @@ func (s *containerRouter) postContainerUpdate(ctx context.Context, w http.Respon
 
 	return httputils.WriteJSON(w, http.StatusOK, resp)
 }
+
+// deriveParentFromProc finds the deepest ".slice" in the caller's cgroup path
+// and returns it as a systemd slice path, e.g. "user.slice/user-1000.slice".
+func deriveParentFromProc(mode string, pc *ctxkey.PeerCred) (string, error) {
+	if pc == nil || pc.PID == 0 {
+		return "", fmt.Errorf("no peer credentials")
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pc.PID))
+	if err != nil {
+		return "", fmt.Errorf("read cgroup: %w", err)
+	}
+	// On cgroup v2, there is one line like: "0::/user.slice/user-1000.slice/session-6.scope"
+	// On cgroup v1, systemd is "name=systemd:/user.slice/user-1000.slice/session-6.scope"
+	lines := strings.Split(string(data), "\n")
+	var path string
+	for _, ln := range lines {
+		if ln == "" {
+			continue
+		}
+		parts := strings.SplitN(ln, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		controller, cgPath := parts[1], parts[2]
+		if controller == "" || controller == "name=systemd" || controller == "" /* v2 */ {
+			path = cgPath
+			// prefer v2 line if present; break on first match
+			if strings.HasPrefix(ln, "0::") {
+				break
+			}
+		}
+	}
+	if path == "" {
+		return "", fmt.Errorf("no cgroup path found")
+	}
+	// Extract slice segments ending with ".slice"
+	segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	var slices []string
+	for _, s := range segs {
+		if strings.HasSuffix(s, ".slice") {
+			slices = append(slices, s)
+		}
+	}
+	if len(slices) == 0 {
+		// Fallback to uid mapping
+		return fmt.Sprintf("user.slice/user-%d.slice", pc.UID), nil
+	}
+	// Build "slice path" up to the deepest slice (exclude scopes/services)
+	// e.g., user.slice/user-1000.slice
+	var b strings.Builder
+	for i, s := range slices {
+		if i > 0 {
+			b.WriteString("/")
+		}
+		b.WriteString(s)
+	}
+	return b.String(), nil
+}
+
 
 func (s *containerRouter) postContainersCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
