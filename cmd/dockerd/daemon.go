@@ -220,6 +220,20 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if cred, err := getPeerCred(c); err == nil && cred != nil {
+				logrus.WithFields(logrus.Fields{
+					"pid": cred.PID,
+					"uid": cred.UID,
+					"gid": cred.GID,
+					"remoteAddr": c.RemoteAddr().String(),
+				}).Info("accepted new connection with peer credentials")
+				return context.WithValue(ctx, ctxkey.PeerCredKey, cred)
+			} else if err != nil {
+				logrus.WithError(err).Error("getPeerCred error")
+			}
+			return ctx
+		},
 	}
 	apiShutdownCtx, apiShutdownCancel := context.WithCancel(context.Background())
 	apiShutdownDone := make(chan struct{})
