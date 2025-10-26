@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"syscall"
+	"golang.org/x/sys/unix"
+
 
 	containerddefaults "github.com/containerd/containerd/defaults"
 	"github.com/docker/docker/api"
@@ -21,6 +24,7 @@ import (
 	"github.com/docker/docker/api/server/middleware"
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/build"
+	"github.com/docker/docker/pkg/ctxkey"
 	checkpointrouter "github.com/docker/docker/api/server/router/checkpoint"
 	"github.com/docker/docker/api/server/router/container"
 	distributionrouter "github.com/docker/docker/api/server/router/distribution"
@@ -79,6 +83,37 @@ func NewDaemonCli() *DaemonCli {
 	return &DaemonCli{
 		apiShutdown: make(chan struct{}),
 	}
+}
+
+func getPeerCred(c net.Conn) (*ctxkey.PeerCred, error) {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return nil, fmt.Errorf("not a syscall.Conn")
+	}
+
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return nil, fmt.Errorf("SyscallConn: %w", err)
+	}
+
+	var cred *ctxkey.PeerCred
+	var ctrlErr error
+
+	// Control runs a function with the underlying FD.
+	if err := raw.Control(func(fd uintptr) {
+		ucred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+		if err != nil {
+			ctrlErr = err
+			return
+		}
+		cred = &ctxkey.PeerCred{PID: int(ucred.Pid), UID: int(ucred.Uid), GID: int(ucred.Gid)}
+	}); err != nil {
+		return nil, fmt.Errorf("raw.Control: %w", err)
+	}
+	if ctrlErr != nil {
+		return nil, fmt.Errorf("getsockopt SO_PEERCRED: %w", ctrlErr)
+	}
+	return cred, nil
 }
 
 func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
