@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"syscall"
-	"golang.org/x/sys/unix"
 
 
 	containerddefaults "github.com/containerd/containerd/defaults"
@@ -24,7 +22,7 @@ import (
 	"github.com/docker/docker/api/server/middleware"
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/build"
-	"github.com/docker/docker/pkg/ctxkey"
+	"github.com/docker/docker/pkg/cgroups"
 	checkpointrouter "github.com/docker/docker/api/server/router/checkpoint"
 	"github.com/docker/docker/api/server/router/container"
 	distributionrouter "github.com/docker/docker/api/server/router/distribution"
@@ -83,37 +81,6 @@ func NewDaemonCli() *DaemonCli {
 	return &DaemonCli{
 		apiShutdown: make(chan struct{}),
 	}
-}
-
-func getPeerCred(c net.Conn) (*ctxkey.PeerCred, error) {
-	sc, ok := c.(syscall.Conn)
-	if !ok {
-		return nil, fmt.Errorf("not a syscall.Conn")
-	}
-
-	raw, err := sc.SyscallConn()
-	if err != nil {
-		return nil, fmt.Errorf("SyscallConn: %w", err)
-	}
-
-	var cred *ctxkey.PeerCred
-	var ctrlErr error
-
-	// Control runs a function with the underlying FD.
-	if err := raw.Control(func(fd uintptr) {
-		ucred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-		if err != nil {
-			ctrlErr = err
-			return
-		}
-		cred = &ctxkey.PeerCred{PID: int(ucred.Pid), UID: int(ucred.Uid), GID: int(ucred.Gid)}
-	}); err != nil {
-		return nil, fmt.Errorf("raw.Control: %w", err)
-	}
-	if ctrlErr != nil {
-		return nil, fmt.Errorf("getsockopt SO_PEERCRED: %w", ctrlErr)
-	}
-	return cred, nil
 }
 
 func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
@@ -221,14 +188,14 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
-			if cred, err := getPeerCred(c); err == nil && cred != nil {
+			if cred, err := cgroups.GetPeerCred(c); err == nil && cred != nil {
 				logrus.WithFields(logrus.Fields{
 					"pid": cred.PID,
 					"uid": cred.UID,
 					"gid": cred.GID,
 					"remoteAddr": c.RemoteAddr().String(),
 				}).Info("accepted new connection with peer credentials")
-				return context.WithValue(ctx, ctxkey.PeerCredKey, cred)
+				return context.WithValue(ctx, cgroups.PeerCredKey, cred)
 			} else if err != nil {
 				logrus.WithError(err).Error("getPeerCred error")
 			}

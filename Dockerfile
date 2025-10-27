@@ -183,7 +183,7 @@ FROM base AS gowinres
 ARG GOWINRES_VERSION=v0.3.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-        GOBIN=/build/ GO111MODULE=on go install "github.com/tc-hib/go-winres@${GOWINRES_VERSION}" \
+        GOBIN=/build/ GO111MODULE=on GOINSECURE=proxy.golang.org go install "github.com/tc-hib/go-winres@${GOWINRES_VERSION}" \
      && /build/go-winres --help
 
 # containerd
