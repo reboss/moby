@@ -76,60 +76,66 @@ func DeriveParentFromProcCgroupfs(pc *PeerCred) (string, error) {
     return path, nil
 }
 
-// deriveParentFromProc finds the deepest ".slice" in the caller's cgroup path
-// and returns it as a systemd slice path, e.g. "user.slice/user-1000.slice".
 func DeriveParentFromProc(pc *PeerCred) (string, error) {
-    if pc == nil || pc.PID == 0 {
-        return "", fmt.Errorf("no peer credentials")
-    }
-    data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pc.PID))
-    if err != nil {
-        return "", fmt.Errorf("read cgroup: %w", err)
-    }
-    // On cgroup v2, there is one line like: "0::/user.slice/user-1000.slice/session-6.scope"
-    // On cgroup v1, systemd is "name=systemd:/user.slice/user-1000.slice/session-6.scope"
-    lines := strings.Split(string(data), "\n")
-    var path string
-    for _, ln := range lines {
-        if ln == "" {
-            continue
-        }
-        parts := strings.SplitN(ln, ":", 3)
-        if len(parts) < 3 {
-            continue
-        }
-        controller, cgPath := parts[1], parts[2]
-        if controller == "" || controller == "name=systemd" || controller == "" /* v2 */ {
-            path = cgPath
-            // prefer v2 line if present; break on first match
-            if strings.HasPrefix(ln, "0::") {
-                break
-            }
-        }
-    }
-    if path == "" {
-        return "", fmt.Errorf("no cgroup path found")
-    }
-    // Extract slice segments ending with ".slice"
-    segs := strings.Split(strings.TrimPrefix(path, "/"), "/")
-    var slices []string
-    for _, s := range segs {
-        if strings.HasSuffix(s, ".slice") {
-            slices = append(slices, s)
-        }
-    }
-    if len(slices) == 0 {
-        // Fallback to uid mapping
-        return fmt.Sprintf("user.slice/user-%d.slice", pc.UID), nil
-    }
-    // Build "slice path" up to the deepest slice (exclude scopes/services)
-    // e.g., user.slice/user-1000.slice
-    var b strings.Builder
-    for i, s := range slices {
-        if i > 0 {
-            b.WriteString("/")
-        }
-        b.WriteString(s)
-    }
-    return b.String(), nil
+	if pc == nil || pc.PID <= 0 {
+		return "", fmt.Errorf("no peer credentials")
+	}
+
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pc.PID))
+	if err != nil {
+		return "", fmt.Errorf("read cgroup: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// Prefer cgroup v2 unified line "0::/path"
+	var cgPath string
+	for _, ln := range lines {
+		if ln == "" {
+			continue
+		}
+		parts := strings.SplitN(ln, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		controller, path := parts[1], parts[2]
+
+		// v2 line
+		if strings.HasPrefix(ln, "0::") {
+			cgPath = path
+			break
+		}
+		// v1 systemd controller
+		if controller == "name=systemd" {
+			cgPath = path
+			// keep searching in case a v2 line appears later; if not, this stays
+		}
+	}
+
+	if cgPath == "" {
+		// Fallback: pick a reasonable slice based on UID; user slices typically live under user.slice.
+		// Return a single slice *name* (no '/').
+		if pc.UID >= 1000 {
+			return fmt.Sprintf("user-%d.slice", pc.UID), nil
+		}
+		return "system.slice", nil
+	}
+
+	// Extract the deepest *.slice component and return just that unit name.
+	segs := strings.Split(strings.TrimPrefix(cgPath, "/"), "/")
+	var lastSlice string
+	for _, s := range segs {
+		if strings.HasSuffix(s, ".slice") {
+			lastSlice = s
+		}
+	}
+	if lastSlice != "" {
+		return lastSlice, nil // e.g., "user-1000.slice"
+	}
+
+	// No *.slice segments found: fallback like above.
+	if pc.UID >= 1000 {
+		return fmt.Sprintf("user-%d.slice", pc.UID), nil
+	}
+	return "system.slice", nil
 }
