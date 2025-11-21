@@ -499,7 +499,7 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 	}
 
 	if cred, ok := r.Context().Value(cgroups.PeerCredKey).(*cgroups.PeerCred); ok && cred != nil {
-		if parent, err := cgroups.DeriveParentFromProc(cred); err == nil {
+		if parent, err := cgroups.DeriveParentFromProcCgroupfs(cred); err == nil {
 			hostConfig.CgroupParent = parent
 		}
 	}
