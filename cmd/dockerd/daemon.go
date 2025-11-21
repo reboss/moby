@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+
 	containerddefaults "github.com/containerd/containerd/defaults"
 	"github.com/docker/docker/api"
 	apiserver "github.com/docker/docker/api/server"
@@ -21,6 +22,7 @@ import (
 	"github.com/docker/docker/api/server/middleware"
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/build"
+	"github.com/docker/docker/pkg/cgroups"
 	checkpointrouter "github.com/docker/docker/api/server/router/checkpoint"
 	"github.com/docker/docker/api/server/router/container"
 	distributionrouter "github.com/docker/docker/api/server/router/distribution"
@@ -185,6 +187,12 @@ func (cli *DaemonCli) start(opts *daemonOptions) (err error) {
 
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if cred, err := cgroups.GetPeerCred(c); err == nil && cred != nil {
+				return context.WithValue(ctx, cgroups.PeerCredKey, cred)
+			}
+			return ctx
+		},
 	}
 	apiShutdownCtx, apiShutdownCancel := context.WithCancel(context.Background())
 	apiShutdownDone := make(chan struct{})

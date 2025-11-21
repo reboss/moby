@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/server/httpstatus"
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/pkg/cgroups"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -491,6 +492,19 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 		}
 		return err
 	}
+
+	if hostConfig == nil {
+	    hostConfig = &container.HostConfig{}
+	    logrus.Info("initialized empty HostConfig")
+	}
+
+	if cred, ok := r.Context().Value(cgroups.PeerCredKey).(*cgroups.PeerCred); ok && cred != nil {
+		if parent, err := cgroups.DeriveParentFromProcCgroupfs(cred); err == nil {
+			hostConfig.CgroupParent = parent
+		}
+	}
+
+
 	version := httputils.VersionFromContext(ctx)
 	adjustCPUShares := versions.LessThan(version, "1.19")
 
