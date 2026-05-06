@@ -365,20 +365,3 @@ func TestGetBlkioThrottleDevices(t *testing.T) {
 	})
 }
 
-// Cgroup adoption tests
-func TestApplyCgroupAdoption_Enabled(t *testing.T) {
-	// Test will be implemented after we add the applyCgroupAdoption method
-	t.Skip("Not yet implemented")
-}
-
-func TestApplyCgroupAdoption_NoPeerCredentials(t *testing.T) {
-	t.Skip("Not yet implemented")
-}
-
-func TestApplyCgroupAdoption_UserOverrideRejected(t *testing.T) {
-	t.Skip("Not yet implemented")
-}
-
-func TestApplyCgroupAdoption_MatchingParentAccepted(t *testing.T) {
-	t.Skip("Not yet implemented")
-}
