@@ -364,3 +364,21 @@ func TestGetBlkioThrottleDevices(t *testing.T) {
 		assert.Check(t, retDevs[0].Rate == WEIGHT, "get device rate")
 	})
 }
+
+// Cgroup adoption tests
+func TestApplyCgroupAdoption_Enabled(t *testing.T) {
+	// Test will be implemented after we add the applyCgroupAdoption method
+	t.Skip("Not yet implemented")
+}
+
+func TestApplyCgroupAdoption_NoPeerCredentials(t *testing.T) {
+	t.Skip("Not yet implemented")
+}
+
+func TestApplyCgroupAdoption_UserOverrideRejected(t *testing.T) {
+	t.Skip("Not yet implemented")
+}
+
+func TestApplyCgroupAdoption_MatchingParentAccepted(t *testing.T) {
+	t.Skip("Not yet implemented")
+}
