@@ -50,6 +50,7 @@ func installConfigFlags(conf *config.Config, flags *pflag.FlagSet) {
 	flags.StringVar(&conf.SeccompProfile, "seccomp-profile", conf.SeccompProfile, `Path to seccomp profile. Set to "unconfined" to disable the default seccomp profile`)
 	flags.Var(&conf.ShmSize, "default-shm-size", "Default shm size for containers")
 	flags.BoolVar(&conf.NoNewPrivileges, "no-new-privileges", false, "Set no-new-privileges by default for new containers")
+	flags.BoolVar(&conf.AdoptUserCgroups, "adopt-user-cgroups", false, "Automatically set container cgroup parent based on the API client's cgroup")
 	flags.StringVar(&conf.IpcMode, "default-ipc-mode", conf.IpcMode, `Default mode for containers ipc ("shareable" | "private")`)
 	flags.Var(&conf.NetworkConfig.DefaultAddressPools, "default-address-pool", "Default address pools for node specific local networks")
 	flags.StringVar(&conf.NetworkConfig.FirewallBackend, "firewall-backend", "", "Firewall backend to use, iptables or nftables")
