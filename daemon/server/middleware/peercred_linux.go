@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"syscall"
 
-	"github.com/containerd/log"
 	"golang.org/x/sys/unix"
 )
 
 // PeerCredKey is the context key for storing peer credentials
 var PeerCredKey = &struct{ name string }{"peercred"}
+
+// PeerConnKey is the context key for storing the raw connection (set by ConnContext)
+// We use a custom key instead of http.LocalAddrContextKey because the HTTP stack
+// overwrites that key with the address, losing the original connection.
+var PeerConnKey = &struct{ name string }{"peerconn"}
 
 // PeerCredentials contains the credentials of a peer connection
 type PeerCredentials struct {
@@ -37,14 +41,6 @@ func (m PeerCredMiddleware) WrapHandler(handler func(ctx context.Context, w http
 		if creds, err := extractPeerCredentials(r); err == nil && creds != nil {
 			// Add credentials to context for downstream handlers
 			ctx = context.WithValue(ctx, PeerCredKey, creds)
-			log.G(ctx).WithFields(log.Fields{
-				"pid": creds.PID,
-				"uid": creds.UID,
-				"gid": creds.GID,
-			}).Debug("extracted peer credentials from Unix socket")
-		} else if err != nil {
-			// Log the error but don't fail - not all connections are Unix sockets
-			log.G(ctx).WithError(err).Debug("failed to extract peer credentials (expected for non-Unix socket connections)")
 		}
 
 		return handler(ctx, w, r, vars)
@@ -58,8 +54,9 @@ func (m PeerCredMiddleware) WrapHandler(handler func(ctx context.Context, w http
 // other transport types, this function returns nil, nil (no error, no credentials).
 func extractPeerCredentials(r *http.Request) (*PeerCredentials, error) {
 	// Try to get the underlying connection from the request context
-	// http.Server stores the connection in the context via http.LocalAddrContextKey
-	conn, ok := r.Context().Value(http.LocalAddrContextKey).(net.Conn)
+	// We use PeerConnKey (set by ConnContext) instead of http.LocalAddrContextKey
+	// because the HTTP stack overwrites that key with the address.
+	conn, ok := r.Context().Value(PeerConnKey).(net.Conn)
 	if !ok || conn == nil {
 		// Not a direct connection or connection not available - this is expected for some scenarios
 		return nil, nil
