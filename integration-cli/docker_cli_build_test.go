@@ -361,7 +361,7 @@ ONBUILD CMD ["hello world"]
 ONBUILD ENTRYPOINT ["echo"]
 ONBUILD RUN ["true"]`))
 
-	cli.BuildCmd(c, name2, build.WithDockerfile(fmt.Sprintf(`FROM %s`, name1)))
+	cli.BuildCmd(c, name2, build.WithDockerfile("FROM "+name1))
 
 	result := cli.DockerCmd(c, "run", name2)
 	result.Assert(c, icmd.Expected{Out: "hello world"})
@@ -966,7 +966,7 @@ func (s *DockerCLIBuildSuite) TestBuildAddBadLinks(c *testing.T) {
 		tempDirWithoutDrive := tempDir[2:]
 		symlinkTarget = fmt.Sprintf(`%s:\..\..\..\..\..\..\..\..\..\..\..\..%s`, driveLetter, tempDirWithoutDrive)
 	} else {
-		symlinkTarget = fmt.Sprintf("/../../../../../../../../../../../..%s", tempDir)
+		symlinkTarget = "/../../../../../../../../../../../.." + tempDir
 	}
 
 	tarPath := filepath.Join(ctx.Dir, "links.tar")
@@ -1444,8 +1444,7 @@ func (s *DockerCLIBuildSuite) TestBuildBlankName(c *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		cli.Docker(cli.Args("build", "-t", name), build.WithDockerfile(fmt.Sprintf(`FROM busybox
-		%s`, tc.expression))).Assert(c, icmd.Expected{
+		cli.Docker(cli.Args("build", "-t", name), build.WithDockerfile("FROM busybox\n"+tc.expression)).Assert(c, icmd.Expected{
 			ExitCode: 1,
 			Err:      tc.expectedStderr,
 		})
@@ -1637,8 +1636,7 @@ func (s *DockerCLIBuildSuite) TestBuildExposeMorePorts(c *testing.T) {
 func (s *DockerCLIBuildSuite) TestBuildExposeOrder(c *testing.T) {
 	testRequires(c, DaemonIsLinux) // Expose not implemented on Windows
 	buildID := func(name, exposed string) string {
-		cli.BuildCmd(c, name, build.WithDockerfile(fmt.Sprintf(`FROM scratch
-		EXPOSE %s`, exposed)))
+		cli.BuildCmd(c, name, build.WithDockerfile("FROM scratch\nEXPOSE "+exposed))
 		id := inspectField(c, name, "Id")
 		return id
 	}
@@ -3052,7 +3050,7 @@ func (s *DockerCLIBuildSuite) TestBuildFromGitWithContext(c *testing.T) {
 	}, true)
 	defer git.Close()
 
-	cli.BuildCmd(c, name, build.WithContextPath(fmt.Sprintf("%s#master:docker", git.RepoURL)))
+	cli.BuildCmd(c, name, build.WithContextPath(git.RepoURL+"#master:docker"))
 
 	res := inspectField(c, name, "Author")
 	if res != "docker" {
@@ -3161,7 +3159,7 @@ func (s *DockerCLIBuildSuite) TestBuildOnBuildOutput(c *testing.T) {
 
 // FIXME(vdemeester) should be a unit test
 func (s *DockerCLIBuildSuite) TestBuildInvalidTag(c *testing.T) {
-	name := "abcd:" + testutil.GenerateRandomAlphaOnlyString(200)
+	name := "abcd:" + testutil.RandomAlpha(200)
 	cli.Docker(cli.Args("build", "-t", name), build.WithDockerfile("FROM "+minimalBaseImage()+"\nMAINTAINER quux\n")).Assert(c, icmd.Expected{
 		ExitCode: 125,
 		Err:      "invalid reference format",
@@ -4315,8 +4313,8 @@ func (s *DockerCLIBuildSuite) TestBuildBuildTimeArgExpansion(c *testing.T) {
 	volVar := "VOL"
 	volVal := "/testVol/"
 	if DaemonIsWindows() {
-		volVal = "C:\\testVol"
-		wdVal = "C:\\tmp"
+		volVal = `C:\testVol`
+		wdVal = `C:\tmp`
 	}
 
 	cli.BuildCmd(c, imgName,
@@ -4366,7 +4364,7 @@ func (s *DockerCLIBuildSuite) TestBuildBuildTimeArgExpansion(c *testing.T) {
 
 	var resMap map[string]any
 	inspectFieldAndUnmarshall(c, imgName, "Config.ExposedPorts", &resMap)
-	if _, ok := resMap[fmt.Sprintf("%s/tcp", exposeVal)]; !ok {
+	if _, ok := resMap[exposeVal+"/tcp"]; !ok {
 		c.Fatalf("Config.ExposedPorts value mismatch. Expected exposed port: %s/tcp, got: %v", exposeVal, resMap)
 	}
 
@@ -5013,7 +5011,7 @@ func (s *DockerRegistryAuthHtpasswdSuite) TestBuildWithExternalAuth(c *testing.T
 
 	icmd.RunCmd(icmd.Cmd{
 		Command: []string{dockerBinary, "--config", tmp, "build", "-"},
-		Stdin:   strings.NewReader(fmt.Sprintf("FROM %s", imgName)),
+		Stdin:   strings.NewReader("FROM " + imgName),
 	}).Assert(c, icmd.Success)
 }
 
@@ -6216,10 +6214,10 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 				skip.If(t, builder.buildkit && DaemonIsWindows() && !containerdSnapshotterEnabled(),
 					"Buildkit is not supported on Windows with graphdrivers")
 
-				time.Sleep(time.Second)
-				before := time.Now()
+				since := daemonUnixTime(t)
 
-				args := []string{"build"}
+				iidFile := filepath.Join(t.TempDir(), "iid")
+				args := []string{"build", "--iidfile", iidFile}
 				args = append(args, tc.args...)
 
 				b := cli.Docker(cli.Args(args...),
@@ -6229,12 +6227,18 @@ func (s *DockerCLIBuildSuite) TestBuildEmitsEvents(t *testing.T) {
 				)
 				assert.NilError(t, b.Compare(icmd.Success), b.Combined())
 
+				imageID, err := os.ReadFile(iidFile)
+				assert.NilError(t, err)
+
+				until := daemonUnixTime(t)
+
 				cmd := cli.Docker(
 					cli.Args("events",
 						"--filter", "type=image",
-						"--since", before.Format(time.RFC3339),
+						"--filter", "image="+strings.TrimSpace(string(imageID)),
+						"--since", since,
+						"--until", until,
 					),
-					cli.WithTimeout(time.Millisecond*300),
 					cli.WithEnvironmentVariables("DOCKER_API_VERSION=v1.46"), // FIXME(thaJeztah): integration-cli runs docker CLI 25.0; we're "upgrading" the API version to a version it doesn't support here ;)
 				)
 

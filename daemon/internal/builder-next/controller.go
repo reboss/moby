@@ -2,7 +2,6 @@ package buildkit
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -154,7 +153,7 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	wo.RegistryHosts = opt.RegistryHosts
 	wo.Labels = getLabels(opt, wo.Labels)
 
-	exec, err := newExecutor(executorOpts{
+	exec, proxyProvider, err := newExecutor(executorOpts{
 		root:                opt.Root,
 		networkController:   opt.NetworkController,
 		dnsConfig:           dnsConfig,
@@ -170,6 +169,20 @@ func newSnapshotterController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
+	if wo.ProxyProvider != nil {
+		if err := wo.ProxyProvider.Close(); err != nil {
+			if proxyProvider != nil {
+				_ = proxyProvider.Close()
+			}
+			return nil, err
+		}
+	}
+	wo.ProxyProvider = proxyProvider
+	defer func() {
+		if retErr != nil && wo.ProxyProvider != nil {
+			_ = wo.ProxyProvider.Close()
+		}
+	}()
 	wo.Executor = exec
 
 	w, err := mobyworker.NewContainerdWorker(ctx, wo, opt.Callbacks, rt)
@@ -355,7 +368,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		return nil, err
 	}
 
-	exec, err := newExecutorGD(executorOpts{
+	exec, proxyProvider, err := newExecutorGD(executorOpts{
 		root:              root,
 		networkController: opt.NetworkController,
 		dnsConfig:         getDNSConfig(opt.DNSConfig),
@@ -373,6 +386,11 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if retErr != nil && proxyProvider != nil {
+			_ = proxyProvider.Close()
+		}
+	}()
 
 	differ, ok := snapshotter.(mobyexporter.Differ)
 	if !ok {
@@ -440,6 +458,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		ImageSource:       src,
 		DownloadManager:   dist.DownloadManager,
 		V2MetadataService: dist.V2MetadataService,
+		RegistryHosts:     opt.RegistryHosts,
 		Exporter:          exp,
 		Transport:         rt,
 		Layers:            layers,
@@ -448,6 +467,7 @@ func newGraphDriverController(ctx context.Context, rt http.RoundTripper, opt Opt
 		GarbageCollect:    mdb.GarbageCollect,
 		Labels:            getLabels(opt, nil),
 		CDIManager:        cdiManager,
+		ProxyProvider:     proxyProvider,
 	}
 
 	wc := &worker.Controller{}
@@ -532,7 +552,7 @@ func parseGCPolicy(p config.BuilderGCRule, prefix string) (reservedSpace, maxUse
 		if prefix != "" {
 			key = prefix + strings.ToTitle(key)
 		}
-		return fmt.Sprintf("failed to parse %s", key)
+		return "failed to parse " + key
 	}
 
 	if p.ReservedSpace != "" {

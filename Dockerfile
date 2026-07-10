@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.26.2
+ARG GO_VERSION=1.26.5
 ARG BASE_DEBIAN_DISTRO="bookworm"
 ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 
@@ -9,7 +9,7 @@ ARG GOLANG_IMAGE="golang:${GO_VERSION}-${BASE_DEBIAN_DISTRO}"
 ARG XX_VERSION=1.9.0
 
 # DOCKERCLI_VERSION is the version of the CLI to install in the dev-container.
-ARG DOCKERCLI_VERSION=v29.4.0
+ARG DOCKERCLI_VERSION=v29.6.0
 ARG DOCKERCLI_REPOSITORY="https://github.com/docker/cli.git"
 
 # cli version used for integration-cli tests
@@ -17,20 +17,18 @@ ARG DOCKERCLI_INTEGRATION_REPOSITORY="https://github.com/docker/cli.git"
 ARG DOCKERCLI_INTEGRATION_VERSION=v25.0.5
 
 # BUILDX_VERSION is the version of buildx to install in the dev container.
-ARG BUILDX_VERSION=0.33.0
+ARG BUILDX_VERSION=0.35.0
 
 # COMPOSE_VERSION is the version of compose to install in the dev container.
-ARG COMPOSE_VERSION=v5.1.3
+ARG COMPOSE_VERSION=v5.1.4
 
 ARG SYSTEMD="false"
 ARG FIREWALLD="false"
 ARG DOCKER_STATIC=1
 
-# REGISTRY_VERSION specifies the version of the registry to download from
-# https://hub.docker.com/r/distribution/distribution. This version of
-# the registry is used to test schema 2 manifests. Generally,  the version
-# specified here should match a current release.
-ARG REGISTRY_VERSION=3.0.0
+# REGISTRY_VERSION is the version of the registry to use for integration tests.
+# It must be a valid tag in the docker.io/library/registry image repository.
+ARG REGISTRY_VERSION=3.1.1
 
 # delve is currently only supported on linux/amd64, linux/arm64, and linux/ppc64le;
 # https://github.com/go-delve/delve/blob/v1.26.0/pkg/proc/native/support_sentinel.go#L1
@@ -77,7 +75,7 @@ RUN --mount=type=cache,sharing=locked,id=moby-criu-aptlib,target=/var/lib/apt \
         && /build/criu --version
 
 # registry
-FROM distribution/distribution:$REGISTRY_VERSION AS registry
+FROM distribution/distribution:${REGISTRY_VERSION} AS registry
 RUN mkdir /build && mv /bin/registry /build/registry
 
 # frozen-images
@@ -110,7 +108,7 @@ WORKDIR /usr/src/delve
 # from the https://github.com/go-delve/delve repository.
 # It can be used to run Docker with a possibility of
 # attaching debugger to it.
-ARG DELVE_VERSION=v1.26.1
+ARG DELVE_VERSION=v1.26.3
 ADD https://github.com/go-delve/delve.git?ref=${DELVE_VERSION}&keep-git-dir=1 .
 
 FROM base AS delve-supported
@@ -144,7 +142,7 @@ WORKDIR /usr/src/containerd
 # It is used to build containerd binaries, and used for the integration tests.
 # The distributed docker .deb and .rpm packages depend on a separate (containerd.io)
 # package, which may be a different version than specified here.
-ARG CONTAINERD_VERSION=v2.2.3
+ARG CONTAINERD_VERSION=v2.3.2
 ADD https://github.com/containerd/containerd.git?ref=${CONTAINERD_VERSION}&keep-git-dir=1 .
 
 FROM base AS containerd-build
@@ -250,7 +248,7 @@ WORKDIR /usr/src/runc
 # This version should usually match the version that is used by the containerd version
 # that is used. If you need to update runc, open a pull request in the containerd
 # project first, and update both after that is merged.
-ARG RUNC_VERSION=v1.3.5
+ARG RUNC_VERSION=v1.4.3
 ADD https://github.com/opencontainers/runc.git?ref=${RUNC_VERSION}&keep-git-dir=1 .
 
 FROM base AS runc-build
@@ -324,7 +322,7 @@ FROM tini-${TARGETOS} AS tini
 # rootlesskit
 FROM base AS rootlesskit-src
 WORKDIR /usr/src/rootlesskit
-ARG ROOTLESSKIT_VERSION=v3.0.0
+ARG ROOTLESSKIT_VERSION=v3.0.1
 ADD https://github.com/rootless-containers/rootlesskit.git?ref=${ROOTLESSKIT_VERSION}&keep-git-dir=1 .
 
 FROM base AS rootlesskit-build
@@ -442,7 +440,7 @@ ENV PATH=/usr/local/cli:$PATH
 ENV TEST_CLIENT_BINARY=/usr/local/cli-integration/docker
 ENV CONTAINERD_ADDRESS=/run/docker/containerd/containerd.sock
 ENV CONTAINERD_NAMESPACE=moby
-WORKDIR /go/src/github.com/docker/docker
+WORKDIR /usr/src/moby
 VOLUME /var/lib/docker
 VOLUME /home/unprivilegeduser/.local/share/docker
 # Wrap all commands in the "docker-in-docker" script to allow nested containers
@@ -472,13 +470,13 @@ RUN useradd --create-home --gid docker unprivilegeduser \
  && mkdir -p /home/unprivilegeduser/.local/share/docker \
  && chown -R unprivilegeduser /home/unprivilegeduser
 # Let us use a .bashrc file
-RUN ln -sfv /go/src/github.com/docker/docker/.bashrc ~/.bashrc
+RUN ln -sfv /usr/src/moby/.bashrc ~/.bashrc
 # Activate bash completion
 RUN echo "source /usr/share/bash-completion/bash_completion" >> /etc/bash.bashrc
 RUN ldconfig
 # Set dev environment as safe git directory to prevent "dubious ownership" errors
 # when bind-mounting the source into the dev-container. See https://github.com/moby/moby/pull/44930
-RUN git config --global --add safe.directory $GOPATH/src/github.com/docker/docker
+RUN git config --global --add safe.directory /usr/src/moby
 # This should only install packages that are specifically needed for the dev environment and nothing else
 # Do you really need to add another package here? Can it be done in a different build stage?
 RUN --mount=type=cache,sharing=locked,id=moby-dev-aptlib,target=/var/lib/apt \
@@ -528,7 +526,7 @@ COPY --link --from=dockercli-integration /build/ /usr/local/cli-integration
 
 FROM base AS build
 COPY --from=gowinres /build/ /usr/local/bin/
-WORKDIR /go/src/github.com/docker/docker
+WORKDIR /usr/src/moby
 ENV CGO_ENABLED=1
 RUN --mount=type=cache,sharing=locked,id=moby-build-aptlib,target=/var/lib/apt \
     --mount=type=cache,sharing=locked,id=moby-build-aptcache,target=/var/cache/apt \

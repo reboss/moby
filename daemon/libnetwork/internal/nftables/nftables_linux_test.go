@@ -31,20 +31,20 @@ func testSetup(t *testing.T) func() {
 	}
 }
 
-func applyAndCheck(t *testing.T, tbl Table, tm Modifier, goldenFilename string) {
+func applyAndCheck(t *testing.T, goldenFilename string, tbl Table, tm ...Modifier) {
 	t.Helper()
-	err := tbl.Apply(context.Background(), tm)
+	err := tbl.Apply(context.Background(), tm...)
 	assert.Check(t, err)
 	res := icmd.RunCommand("nft", "list", "table", string(tbl.Family()), tbl.Name())
 	res.Assert(t, icmd.Success)
 	golden.Assert(t, res.Combined(), goldenFilename)
 }
 
-func reloadAndCheck(t *testing.T, tbl Table, ipv Family, goldenFilename string) {
+func reloadAndCheck(t *testing.T, goldenFilename string, tbl Table) {
 	t.Helper()
 	err := tbl.Reload(context.Background())
 	assert.Check(t, err)
-	res := icmd.RunCommand("nft", "list", "table", string(ipv), tbl.t.Name)
+	res := icmd.RunCommand("nft", "list", "table", string(tbl.Family()), tbl.Name())
 	res.Assert(t, icmd.Success)
 	golden.Assert(t, res.Combined(), goldenFilename)
 }
@@ -60,8 +60,8 @@ func TestTable(t *testing.T) {
 	defer tbl6.Close()
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl4, Modifier{}, t.Name()+"/created4.golden")
-	applyAndCheck(t, tbl6, Modifier{}, t.Name()+"/created6.golden")
+	applyAndCheck(t, t.Name()+"/created4.golden", tbl4, Modifier{})
+	applyAndCheck(t, t.Name()+"/created6.golden", tbl6, Modifier{})
 }
 
 func TestChain(t *testing.T) {
@@ -100,14 +100,14 @@ func TestChain(t *testing.T) {
 	tm.Create(bcJumpRule)
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl, tm, t.Name()+"/created.golden")
+	applyAndCheck(t, t.Name()+"/created.golden", tbl, tm)
 
 	// Delete a rule from the base chain.
 	tm = Modifier{}
 	tm.Delete(bcCounterRule)
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl, tm, t.Name()+"/modified.golden")
+	applyAndCheck(t, t.Name()+"/modified.golden", tbl, tm)
 
 	// Delete the base chain.
 	tm = Modifier{}
@@ -117,7 +117,7 @@ func TestChain(t *testing.T) {
 	tm.Delete(cDesc)
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl, tm, t.Name()+"/deleted.golden")
+	applyAndCheck(t, t.Name()+"/deleted.golden", tbl, tm)
 }
 
 func TestChainRuleGroups(t *testing.T) {
@@ -134,7 +134,7 @@ func TestChainRuleGroups(t *testing.T) {
 	tm.Create(Rule{Chain: chainName, Group: 100, Rule: []string{"iifname hello101 counter"}})
 	tm.Create(Rule{Chain: chainName, Group: 200, Rule: []string{"iifname hello201 counter"}})
 	tm.Create(Rule{Chain: chainName, Group: 100, Rule: []string{"iifname hello102 counter"}})
-	applyAndCheck(t, tbl, tm, t.Name()+".golden")
+	applyAndCheck(t, t.Name()+".golden", tbl, tm)
 }
 
 func TestIgnoreExist(t *testing.T) {
@@ -149,7 +149,7 @@ func TestIgnoreExist(t *testing.T) {
 	tm.Create(Chain{Name: chainName})
 	tm.Create(Rule{Chain: chainName, Rule: []string{"counter"}})
 	tm.Create(Rule{Chain: chainName, Rule: []string{"counter"}, IgnoreExist: true})
-	applyAndCheck(t, tbl, tm, t.Name()+"/created.golden")
+	applyAndCheck(t, t.Name()+"/created.golden", tbl, tm)
 
 	// Add the rule again, ignoring the duplicate, but in a modifier that has an
 	// error - check that the existing rule isn't removed by rollback of this modifier.
@@ -160,12 +160,12 @@ func TestIgnoreExist(t *testing.T) {
 	assert.Check(t, err != nil, "Expected an error")
 
 	// Reload, to flush table state.
-	reloadAndCheck(t, tbl, IPv4, t.Name()+"/created.golden")
+	reloadAndCheck(t, t.Name()+"/created.golden", tbl)
 
 	// Delete the rule.
 	tmDel := Modifier{}
 	tmDel.Delete(Rule{Chain: chainName, Rule: []string{"counter"}})
-	applyAndCheck(t, tbl, tmDel, t.Name()+"/deleted.golden")
+	applyAndCheck(t, t.Name()+"/deleted.golden", tbl, tmDel)
 
 	// Delete it again, in another chain that will roll back, to check it's not resurrected.
 	tmReDel := Modifier{}
@@ -175,7 +175,7 @@ func TestIgnoreExist(t *testing.T) {
 	assert.Check(t, err != nil, "Expected an error")
 
 	// Reload, to flush table state.
-	reloadAndCheck(t, tbl, IPv4, t.Name()+"/deleted.golden")
+	reloadAndCheck(t, t.Name()+"/deleted.golden", tbl)
 }
 
 func TestVMap(t *testing.T) {
@@ -189,18 +189,18 @@ func TestVMap(t *testing.T) {
 
 	// Create a verdict map.
 	const mapName = "this_is_a_vmap"
-	tm.Create(VMap{Name: mapName, ElementType: NftTypeIfname})
-	tm.Create(VMapElement{VmapName: mapName, Key: "eth0", Verdict: "return"})
-	tm.Create(VMapElement{VmapName: mapName, Key: "eth1", Verdict: "drop"})
+	tm.Create(Map{Name: mapName, ElementType: Ifname.VMap()})
+	tm.Create(MapElement{MapName: mapName, Key: "eth0", Value: "return"})
+	tm.Create(MapElement{MapName: mapName, Key: "eth1", Value: "drop"})
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl, tm, t.Name()+"/created.golden")
+	applyAndCheck(t, t.Name()+"/created.golden", tbl, tm)
 
 	// Undo those changes by reversing the commands.
 	tmRev := tm.Reverse()
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl, tmRev, t.Name()+"/deleted.golden")
+	applyAndCheck(t, t.Name()+"/deleted.golden", tbl, tmRev)
 }
 
 func TestSet(t *testing.T) {
@@ -217,22 +217,22 @@ func TestSet(t *testing.T) {
 	// Create a set in each table.
 	const set4Name = "set4"
 	tm4 := Modifier{}
-	tm4.Create(Set{Name: set4Name, ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}})
+	tm4.Create(Set{Name: set4Name, ElementType: IPv4Addr, Flags: []string{"interval"}})
 	const set6Name = "set6"
 	tm6 := Modifier{}
-	tm6.Create(Set{Name: set6Name, ElementType: NftTypeIPv6Addr, Flags: []string{"interval"}})
+	tm6.Create(Set{Name: set6Name, ElementType: IPv6Addr, Flags: []string{"interval"}})
 
 	// Add elements to each set.
 	tm4.Create(SetElement{SetName: set4Name, Element: "192.0.2.0/24"})
 	tm6.Create(SetElement{SetName: set6Name, Element: "2001:db8::/64"})
 
 	// Update nftables and check what happened.
-	applyAndCheck(t, tbl4, tm4, t.Name()+"/created4.golden")
-	applyAndCheck(t, tbl6, tm6, t.Name()+"/created6.golden")
+	applyAndCheck(t, t.Name()+"/created4.golden", tbl4, tm4)
+	applyAndCheck(t, t.Name()+"/created6.golden", tbl6, tm6)
 
 	// Delete elements.
-	applyAndCheck(t, tbl4, tm4.Reverse(), t.Name()+"/deleted4.golden")
-	applyAndCheck(t, tbl6, tm6.Reverse(), t.Name()+"/deleted6.golden")
+	applyAndCheck(t, t.Name()+"/deleted4.golden", tbl4, tm4.Reverse())
+	applyAndCheck(t, t.Name()+"/deleted6.golden", tbl6, tm6.Reverse())
 }
 
 func TestReload(t *testing.T) {
@@ -256,15 +256,15 @@ func TestReload(t *testing.T) {
 	tm.Create(Rule{Chain: bcName, Group: 0, Rule: []string{"counter"}})
 
 	const vmapName = "this_is_a_vmap"
-	tm.Create(VMap{Name: vmapName, ElementType: NftTypeIfname})
-	tm.Create(VMapElement{VmapName: vmapName, Key: "eth0", Verdict: "return"})
-	tm.Create(VMapElement{VmapName: vmapName, Key: "eth1", Verdict: "return"})
+	tm.Create(Map{Name: vmapName, ElementType: Ifname.VMap()})
+	tm.Create(MapElement{MapName: vmapName, Key: "eth0", Value: "return"})
+	tm.Create(MapElement{MapName: vmapName, Key: "eth1", Value: "return"})
 
 	const setName = "this_is_a_set"
-	tm.Create(Set{Name: setName, ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}})
+	tm.Create(Set{Name: setName, ElementType: IPv4Addr, Flags: []string{"interval"}})
 	tm.Create(SetElement{SetName: setName, Element: "192.0.2.0/24"})
 
-	applyAndCheck(t, tbl, tm, t.Name()+"/created.golden")
+	applyAndCheck(t, t.Name()+"/created.golden", tbl, tm)
 
 	// Delete the underlying nftables table.
 	deleteTable := func() {
@@ -291,7 +291,40 @@ func TestReload(t *testing.T) {
 	// from a vmap/set will trigger this.
 	tm = Modifier{}
 	tm.Delete(SetElement{SetName: setName, Element: "192.0.2.0/24"})
-	applyAndCheck(t, tbl, tm, t.Name()+"/recovered.golden")
+	applyAndCheck(t, t.Name()+"/recovered.golden", tbl, tm)
+}
+
+func TestApplyMultipleModifiers(t *testing.T) {
+	defer testSetup(t)()
+
+	tbl, err := NewTable(IPv4, "this_is_a_table")
+	assert.NilError(t, err)
+	defer tbl.Close()
+
+	const chainName = "this_is_a_chain"
+	var tm1, tm2 Modifier
+	tm1.Create(Chain{Name: chainName})
+	tm1.Create(Rule{Chain: chainName, Rule: []string{"counter"}})
+
+	tm2.Create(Rule{Chain: chainName, Rule: []string{"drop"}})
+	// This rule should fail validation and trigger rollback.
+	tm2.Create(Rule{Chain: "bogus", Rule: []string{"counter"}})
+	tm2.Create(Rule{Chain: chainName, Rule: []string{"reject"}})
+
+	err = tbl.Apply(context.Background(), tm1, tm2)
+	assert.Check(t, err != nil, "Expected an error")
+
+	// Verify the apply was a no-op: the table should not exist yet.
+	res := icmd.RunCommand("nft", "list", "table", string(tbl.Family()), tbl.Name())
+	res.Assert(t, icmd.Expected{ExitCode: 1})
+
+	// Verify no traces of the failed apply remain in memory.
+	reloadAndCheck(t, t.Name()+"/empty.golden", tbl)
+
+	// A subsequent valid apply should still succeed.
+	var tm3 Modifier
+	tm3.Create(Rule{Chain: chainName, Rule: []string{"accept"}})
+	applyAndCheck(t, t.Name()+"/created.golden", tbl, tm1, tm3)
 }
 
 func TestValidation(t *testing.T) {
@@ -463,110 +496,110 @@ func TestValidation(t *testing.T) {
 			},
 			expErr: "chain 'achain', cannot add empty rule",
 		},
-		// VMap
+		// Map (verdict)
 		{
-			name: "duplicate vmap",
+			name: "duplicate map",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
 			},
-			expErr: "vmap 'avmap' already exists",
+			expErr: "map 'avmap' already exists",
 		},
 		{
-			name: "delete nonexistent vmap",
+			name: "delete nonexistent map",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}, delete: true},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}, delete: true},
 			},
-			expErr: "cannot delete vmap 'avmap', it does not exist",
+			expErr: "cannot delete map 'avmap', it does not exist",
 		},
 		{
-			name:   "missing vmap name",
-			cmds:   []command{{obj: VMap{ElementType: NftTypeIfname}}},
-			expErr: "vmap must have a name",
+			name:   "missing map name",
+			cmds:   []command{{obj: Map{ElementType: Ifname.VMap()}}},
+			expErr: "map must have a name",
 		},
 		{
-			name:   "missing vmap element type",
-			cmds:   []command{{obj: VMap{Name: "avmap"}}},
-			expErr: "vmap 'avmap' has no element type",
+			name:   "missing map element type",
+			cmds:   []command{{obj: Map{Name: "avmap"}}},
+			expErr: "map 'avmap' has no element type",
 		},
 		{
-			name: "delete non-empty vmap",
+			name: "delete non-empty map",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0", Verdict: "drop"}},
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}, delete: true},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{MapName: "avmap", Key: "eth0", Value: "drop"}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}, delete: true},
 			},
-			expErr: "cannot delete vmap 'avmap', it contains 1 elements",
+			expErr: "cannot delete map 'avmap', it contains 1 elements",
 		},
-		// VMapElement
+		// MapElement
 		{
-			name: "duplicate vmap element",
+			name: "duplicate map element",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0", Verdict: "drop"}},
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0", Verdict: "drop"}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{MapName: "avmap", Key: "eth0", Value: "drop"}},
+				{obj: MapElement{MapName: "avmap", Key: "eth0", Value: "drop"}},
 			},
-			expErr: "verdict map 'avmap' already contains element 'eth0'",
-		},
-		{
-			name: "add to vmap that does not exist",
-			cmds: []command{
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0", Verdict: "drop"}},
-			},
-			expErr: "cannot add to vmap 'avmap', it does not exist",
+			expErr: "map 'avmap' already contains element 'eth0'",
 		},
 		{
-			name: "delete nonexistent vmap element",
+			name: "add to map that does not exist",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0", Verdict: "drop"}, delete: true},
+				{obj: MapElement{MapName: "avmap", Key: "eth0", Value: "drop"}},
 			},
-			expErr: "verdict map 'avmap' does not contain element 'eth0'",
+			expErr: "cannot add to map 'avmap', it does not exist",
 		},
 		{
-			name: "vmap element with no named vmap",
+			name: "delete nonexistent map element",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{Key: "eth0", Verdict: "drop"}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{MapName: "avmap", Key: "eth0", Value: "drop"}, delete: true},
 			},
-			expErr: "cannot add element to unnamed vmap",
+			expErr: "map 'avmap' does not contain element 'eth0'",
 		},
 		{
-			name: "vmap element with no key",
+			name: "map element with no named map",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{VmapName: "avmap", Verdict: "drop"}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{Key: "eth0", Value: "drop"}},
 			},
-			expErr: "cannot add to vmap 'avmap', element must have key and verdict",
+			expErr: "cannot add element to unnamed map",
 		},
 		{
-			name: "vmap element with no verdict",
+			name: "map element with no key",
 			cmds: []command{
-				{obj: VMap{Name: "avmap", ElementType: NftTypeIfname}},
-				{obj: VMapElement{VmapName: "avmap", Key: "eth0"}},
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{MapName: "avmap", Value: "drop"}},
 			},
-			expErr: "cannot add to vmap 'avmap', element must have key and verdict",
+			expErr: "cannot add to map 'avmap', element must have key and value",
+		},
+		{
+			name: "map element with no value",
+			cmds: []command{
+				{obj: Map{Name: "avmap", ElementType: Ifname.VMap()}},
+				{obj: MapElement{MapName: "avmap", Key: "eth0"}},
+			},
+			expErr: "cannot add to map 'avmap', element must have key and value",
 		},
 		// Set
 		{
 			name: "duplicate set",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 			},
 			expErr: "set 'aset' already exists",
 		},
 		{
 			name: "delete nonexistent set",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}, delete: true},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}, delete: true},
 			},
 			expErr: "cannot delete set 'aset', it does not exist",
 		},
 		{
 			name: "missing set name",
 			cmds: []command{
-				{obj: Set{ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{ElementType: IPv4Addr, Flags: []string{"interval"}}},
 			},
 			expErr: "set must have a name",
 		},
@@ -580,9 +613,9 @@ func TestValidation(t *testing.T) {
 		{
 			name: "delete non-empty set",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{SetName: "aset", Element: "192.0.2.0/24"}},
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}, delete: true},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}, delete: true},
 			},
 			expErr: "cannot delete set 'aset', it contains 1 elements",
 		},
@@ -590,7 +623,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "duplicate set element",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{SetName: "aset", Element: "192.0.2.0/24"}},
 				{obj: SetElement{SetName: "aset", Element: "192.0.2.0/24"}},
 			},
@@ -599,7 +632,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "delete nonexistent set element",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{SetName: "aset", Element: "192.0.2.0/24"}, delete: true},
 			},
 			expErr: "cannot delete '192.0.2.0/24' from set 'aset', it does not exist",
@@ -607,7 +640,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "add set element to unnamed set",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{Element: "192.0.2.0/24"}},
 			},
 			expErr: "cannot add to set '', it does not exist",
@@ -615,7 +648,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "add set element with no element",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{SetName: "aset"}},
 			},
 			expErr: "cannot add to set 'aset', element not specified",
@@ -623,7 +656,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "mismatched set element type",
 			cmds: []command{
-				{obj: Set{Name: "aset", ElementType: NftTypeIPv4Addr, Flags: []string{"interval"}}},
+				{obj: Set{Name: "aset", ElementType: IPv4Addr, Flags: []string{"interval"}}},
 				{obj: SetElement{SetName: "aset", Element: "2001:db8::/64"}},
 			},
 			expErr: "Address family for hostname not supported",
@@ -645,7 +678,7 @@ func TestValidation(t *testing.T) {
 			res := icmd.RunCommand("nft", "list", "table", string(IPv4), "tablename")
 			res.Assert(t, icmd.Expected{ExitCode: 1})
 			// Check the empty table can be created (the Table structure is still healthy).
-			applyAndCheck(t, tbl, Modifier{}, testName+"/empty.golden")
+			applyAndCheck(t, testName+"/empty.golden", tbl, Modifier{})
 		})
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/moby/moby/v2/daemon/internal/otelutil"
 	"github.com/moby/moby/v2/daemon/internal/usergroup"
 	"github.com/moby/moby/v2/daemon/libnetwork"
+	"github.com/moby/moby/v2/daemon/server/middleware"
 	nwconfig "github.com/moby/moby/v2/daemon/libnetwork/config"
 	"github.com/moby/moby/v2/daemon/libnetwork/drivers/bridge"
 	"github.com/moby/moby/v2/daemon/libnetwork/netlabel"
@@ -39,6 +40,7 @@ import (
 	"github.com/moby/moby/v2/daemon/pkg/opts"
 	volumemounts "github.com/moby/moby/v2/daemon/volume/mounts"
 	"github.com/moby/moby/v2/errdefs"
+	cgroupsadopt "github.com/moby/moby/v2/pkg/cgroups"
 	"github.com/moby/moby/v2/pkg/sysinfo"
 	"github.com/moby/sys/mount"
 	"github.com/moby/sys/user"
@@ -317,7 +319,7 @@ func adjustParallelLimit(n int, limit int) int {
 
 // adaptContainerSettings is called during container creation to modify any
 // settings necessary in the HostConfig structure.
-func (daemon *Daemon) adaptContainerSettings(daemonCfg *config.Config, hostConfig *containertypes.HostConfig) error {
+func (daemon *Daemon) adaptContainerSettings(ctx context.Context, daemonCfg *config.Config, hostConfig *containertypes.HostConfig) error {
 	if hostConfig.Memory > 0 && hostConfig.MemorySwap == 0 {
 		// By default, MemorySwap is set to twice the size of Memory.
 		hostConfig.MemorySwap = hostConfig.Memory * 2
@@ -367,6 +369,42 @@ func (daemon *Daemon) adaptContainerSettings(daemonCfg *config.Config, hostConfi
 		defaultOomKillDisable := false
 		hostConfig.OomKillDisable = &defaultOomKillDisable
 	}
+
+	// Apply cgroup adoption if enabled
+	if daemonCfg.AdoptUserCgroups {
+		if err := daemon.applyCgroupAdoption(ctx, hostConfig); err != nil {
+			return fmt.Errorf("failed to apply cgroup adoption: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// applyCgroupAdoption enforces cgroup parent adoption based on the API client's cgroup.
+// When enabled via daemon config, this ensures containers run under their creator's cgroup.
+func (daemon *Daemon) applyCgroupAdoption(ctx context.Context, hostConfig *containertypes.HostConfig) error {
+	// Extract peer credentials from context (set by peer credential middleware)
+	creds, ok := ctx.Value(middleware.PeerCredKey).(*middleware.PeerCredentials)
+	if !ok || creds == nil {
+		return fmt.Errorf("peer credentials not available")
+	}
+
+	// Derive the cgroup parent from the peer's PID
+	parent, err := cgroupsadopt.DeriveParentFromPid(creds.PID)
+	if err != nil {
+		return fmt.Errorf("failed to derive cgroup parent: %w", err)
+	}
+
+	// ENFORCE: Reject if user specified a different cgroup parent
+	// This ensures ALL containers run under their creator's cgroup without exception
+	if hostConfig.CgroupParent != "" && hostConfig.CgroupParent != parent {
+		return errdefs.InvalidParameter(fmt.Errorf(
+			"cannot set cgroup parent when --adopt-user-cgroups is enabled: "+
+				"containers must run under creator's cgroup (%s)", parent))
+	}
+
+	// Set the adopted cgroup parent
+	hostConfig.CgroupParent = parent
 
 	return nil
 }
@@ -502,7 +540,7 @@ func verifyPlatformContainerResources(resources *containertypes.Resources, sysIn
 		return warnings, errors.New("CPU cfs quota can not be less than 1ms (i.e. 1000)")
 	}
 	if resources.CPUPercent > 0 {
-		warnings = append(warnings, fmt.Sprintf("%s does not support CPU percent. Percent discarded.", runtime.GOOS))
+		warnings = append(warnings, runtime.GOOS+" does not support CPU percent. Percent discarded.")
 		resources.CPUPercent = 0
 	}
 
@@ -631,7 +669,10 @@ func verifyPlatformContainerSettings(daemon *Daemon, daemonCfg *configStore, hos
 	if hostConfig == nil {
 		return nil, nil
 	}
-	sysInfo := daemon.RawSysInfo()
+	sysInfo, err := daemon.RawSysInfo()
+	if err != nil {
+		return nil, err
+	}
 
 	w, err := verifyPlatformContainerResources(&hostConfig.Resources, sysInfo, update)
 
@@ -1623,7 +1664,20 @@ func getSysInfo(cfg *config.Config) *sysinfo.SysInfo {
 			siOpts = append(siOpts, sysinfo.WithCgroup2GroupPath("/user.slice/user-"+euid+".slice"))
 		}
 	}
-	return sysinfo.New(siOpts...)
+	si := sysinfo.New(siOpts...)
+
+	// The "time-namespaces" feature-flag is a (temporary) escape-hatch to disable
+	// the use of time-namespaces for containers. This allows users to return to the
+	// previous default, which unconditionally used the host's time-namespace.
+	//
+	// We can consider removing this flag if there's no regressions; see https://github.com/moby/moby/pull/52326#issuecomment-4401495854
+	if enabled, ok := cfg.Features["time-namespaces"]; ok && !enabled {
+		if si.TimeNamespaces {
+			si.TimeNamespaces = false
+			log.G(context.TODO()).Info("time-namespaces disabled through feature-override")
+		}
+	}
+	return si
 }
 
 func recursiveUnmount(target string) error {

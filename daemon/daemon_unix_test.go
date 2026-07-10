@@ -364,3 +364,4 @@ func TestGetBlkioThrottleDevices(t *testing.T) {
 		assert.Check(t, retDevs[0].Rate == WEIGHT, "get device rate")
 	})
 }
+

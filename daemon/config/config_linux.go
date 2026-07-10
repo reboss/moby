@@ -94,6 +94,10 @@ type Config struct {
 	// ResolvConf is the path to the configuration of the host resolver
 	ResolvConf string `json:"resolv-conf,omitempty"`
 	Rootless   bool   `json:"rootless,omitempty"`
+	// AdoptUserCgroups forces containers to inherit their creator's cgroup parent.
+	// When enabled, containers cannot override CgroupParent and will be placed under
+	// the cgroup of the process making the API request (requires Unix socket connection).
+	AdoptUserCgroups bool `json:"adopt-user-cgroups,omitempty"`
 }
 
 // GetExecRoot returns the user configured Exec-root
@@ -130,7 +134,7 @@ func (conf *Config) IsSwarmCompatible() error {
 	}
 	// Swarm has not yet been updated to use nftables. But, if "iptables" is disabled, it
 	// doesn't add rules anyway.
-	if conf.FirewallBackend == "nftables" && conf.EnableIPTables {
+	if conf.FirewallBackend == "nftables" && conf.EnableIPTables && !conf.Features["swarm-nftables"] {
 		return errors.New("--firewall-backend=nftables is incompatible with swarm mode")
 	}
 	return nil
@@ -155,6 +159,7 @@ func setPlatformDefaults(cfg *Config) error {
 	}
 
 	var err error
+	cfg.BridgeConfig.EnableUserlandProxy = true
 	cfg.BridgeConfig.UserlandProxyPath, err = lookupBinPath(userlandProxyBinary)
 	if err != nil {
 		// Log, but don't error here. This allows running a daemon with

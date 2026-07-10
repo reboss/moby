@@ -1238,9 +1238,10 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithNames(c *testing.T) {
 	assert.NilError(c, err, out)
 	test2ID := strings.TrimSpace(out)
 
-	out, err = s.d.Cmd("run", "-d", "--name=test3", "--link", "test2:abc", "busybox", "top")
-	assert.NilError(c, err)
-	test3ID := strings.TrimSpace(out)
+	res := s.d.RunCmd("run", "-d", "--name=test3", "--link", "test2:abc", "busybox", "top")
+	assert.NilError(c, res.Error)
+	// Discard any warnings about legacy links, which are emitted on stderr.
+	test3ID := strings.TrimSpace(res.Stdout())
 
 	s.d.Restart(c)
 
@@ -1559,7 +1560,7 @@ func (s *DockerDaemonSuite) TestDaemonMaxConcurrencyWithConfigFile(c *testing.T)
 	err := os.WriteFile(configFilePath, []byte(`{ "max-concurrent-downloads" : 8 }`), 0o666)
 	assert.NilError(c, err)
 	defer os.Remove(configFilePath)
-	s.d.Start(c, fmt.Sprintf("--config-file=%s", configFilePath))
+	s.d.Start(c, "--config-file="+configFilePath)
 
 	expectedMaxConcurrentUploads := `level=debug msg="Max Concurrent Uploads: 5"`
 	expectedMaxConcurrentDownloads := `level=debug msg="Max Concurrent Downloads: 8"`
@@ -1594,7 +1595,7 @@ func (s *DockerDaemonSuite) TestDaemonMaxConcurrencyWithConfigFileReload(c *test
 	assert.NilError(c, err)
 	defer os.Remove(configFilePath)
 
-	s.d.Start(c, fmt.Sprintf("--config-file=%s", configFilePath))
+	s.d.Start(c, "--config-file="+configFilePath)
 
 	expectedMaxConcurrentUploads := `level=debug msg="Max Concurrent Uploads: 5"`
 	expectedMaxConcurrentDownloads := `level=debug msg="Max Concurrent Downloads: 3"`
@@ -1962,7 +1963,7 @@ func (s *DockerDaemonSuite) TestDaemonShutdownTimeoutWithConfigFile(c *testing.T
 	assert.NilError(c, err)
 	defer os.Remove(configFilePath)
 
-	s.d.Start(c, fmt.Sprintf("--config-file=%s", configFilePath))
+	s.d.Start(c, "--config-file="+configFilePath)
 
 	err = os.WriteFile(configFilePath, []byte(`{ "shutdown-timeout" : 5 }`), 0o666)
 	assert.NilError(c, err)
@@ -2105,7 +2106,7 @@ func (s *DockerDaemonSuite) TestShmSize(c *testing.T) {
 	size := 67108864 * 2
 	pattern := regexp.MustCompile(fmt.Sprintf("shm on /dev/shm type tmpfs(.*)size=%dk", size/1024))
 
-	s.d.StartWithBusybox(testutil.GetContext(c), c, "--default-shm-size", fmt.Sprintf("%v", size))
+	s.d.StartWithBusybox(testutil.GetContext(c), c, "--default-shm-size", strconv.Itoa(size))
 
 	name := "shm1"
 	out, err := s.d.Cmd("run", "--name", name, "busybox", "mount")
@@ -2113,7 +2114,7 @@ func (s *DockerDaemonSuite) TestShmSize(c *testing.T) {
 	assert.Assert(c, pattern.MatchString(out))
 	out, err = s.d.Cmd("inspect", "--format", "{{.HostConfig.ShmSize}}", name)
 	assert.NilError(c, err, "Output: %s", out)
-	assert.Equal(c, strings.TrimSpace(out), fmt.Sprintf("%v", size))
+	assert.Equal(c, strings.TrimSpace(out), strconv.Itoa(size))
 }
 
 func (s *DockerDaemonSuite) TestShmSizeReload(c *testing.T) {
@@ -2137,7 +2138,7 @@ func (s *DockerDaemonSuite) TestShmSizeReload(c *testing.T) {
 	assert.Assert(c, pattern.MatchString(out))
 	out, err = s.d.Cmd("inspect", "--format", "{{.HostConfig.ShmSize}}", name)
 	assert.NilError(c, err, "Output: %s", out)
-	assert.Equal(c, strings.TrimSpace(out), fmt.Sprintf("%v", size))
+	assert.Equal(c, strings.TrimSpace(out), strconv.Itoa(size))
 
 	size = 67108864 * 3
 	configData = fmt.Appendf(nil, `{"default-shm-size": "%dM"}`, size/1024/1024)
@@ -2153,7 +2154,7 @@ func (s *DockerDaemonSuite) TestShmSizeReload(c *testing.T) {
 	assert.Assert(c, pattern.MatchString(out))
 	out, err = s.d.Cmd("inspect", "--format", "{{.HostConfig.ShmSize}}", name)
 	assert.NilError(c, err, "Output: %s", out)
-	assert.Equal(c, strings.TrimSpace(out), fmt.Sprintf("%v", size))
+	assert.Equal(c, strings.TrimSpace(out), strconv.Itoa(size))
 }
 
 func testDaemonStartIpcMode(t *testing.T, from, mode string, valid bool) {

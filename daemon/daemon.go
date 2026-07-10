@@ -40,6 +40,7 @@ import (
 	"github.com/moby/moby/v2/daemon/internal/nri"
 	"github.com/moby/sys/user"
 	"github.com/moby/sys/userns"
+	"github.com/opencontainers/selinux/go-selinux"
 	"github.com/pkg/errors"
 	bolt "go.etcd.io/bbolt"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -114,6 +115,7 @@ type Daemon struct {
 	root              string
 	sysInfoOnce       sync.Once
 	sysInfo           *sysinfo.SysInfo
+	sysInfoErr        error
 	shutdown          bool
 	idMapping         user.IdentityMapping
 	PluginStore       *plugin.Store // TODO: remove
@@ -244,6 +246,14 @@ func (daemon *Daemon) loadContainers(ctx context.Context) (map[string]map[string
 			if err != nil {
 				log.G(ctx).WithFields(log.Fields{"error": err, "container": id}).Error("Failed to load container")
 				return
+			}
+			if c.ProcessLabel != "" {
+				if err := selinux.ReserveLabelV2(c.ProcessLabel); err != nil {
+					// Don't treat this as a fatal error to preserve existing
+					// behavior, and because this is restoring existing state,
+					// so there's no practical way to resolve this.
+					log.G(ctx).WithFields(log.Fields{"error": err, "container": id}).Error("Failed to reserve SELinux label during load")
+				}
 			}
 
 			mapLock.Lock()
@@ -912,22 +922,21 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 
 	migrationThreshold := int64(-1)
 	if config.Features["containerd-migration"] {
+		migrationThreshold = 0
 		if ts := os.Getenv("DOCKER_MIGRATE_SNAPSHOTTER_THRESHOLD"); ts != "" {
 			v, err := units.FromHumanSize(ts)
-			if err == nil {
-				migrationThreshold = v
-			} else {
-				log.G(ctx).WithError(err).WithField("size", ts).Warn("Invalid migration threshold value, defaulting to 0")
-				migrationThreshold = 0
+			if err != nil {
+				return nil, fmt.Errorf("invalid migration threshold value (DOCKER_MIGRATE_SNAPSHOTTER_THRESHOLD=%s): %w", ts, err)
 			}
-
-		} else {
-			migrationThreshold = 0
+			if v < 0 {
+				return nil, fmt.Errorf("invalid migration threshold value (DOCKER_MIGRATE_SNAPSHOTTER_THRESHOLD=%s): value must not be negative", ts)
+			}
+			migrationThreshold = v
 		}
 		if migrationThreshold > 0 {
 			log.G(ctx).WithField("max_size", migrationThreshold).Info("(Experimental) Migration to containerd is enabled, driver will be switched to snapshotter after migration is complete")
 		} else {
-			log.G(ctx).WithField("env", os.Environ()).Info("Migration to containerd is enabled, driver will be switched to snapshotter if there are no images or containers")
+			log.G(ctx).Info("Migration to containerd is enabled, driver will be switched to snapshotter if there are no images or containers")
 		}
 	}
 
@@ -1036,7 +1045,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 			shim     string
 			shimOpts any
 		)
-		if runtime.GOOS != "windows" {
+		if !isWindows {
 			shim, shimOpts, err = rts.Get("")
 			if err != nil {
 				return nil, err
@@ -1410,7 +1419,7 @@ func verifierProvider(root string) func() (*policyverifier.Verifier, error) {
 		}
 
 		confDir := filepath.Join(root, "policy")
-		if err := os.MkdirAll(filepath.Join(confDir, "tuf"), 0o644); err != nil {
+		if err := os.MkdirAll(confDir, 0o700); err != nil {
 			return nil, errors.Wrapf(err, "failed to create policy verifier config dir")
 		}
 
@@ -1585,7 +1594,7 @@ func (daemon *Daemon) Mount(container *container.Container) error {
 		// The mount path reported by the graph driver should always be trusted on Windows, since the
 		// volume path for a given mounted layer may change over time.  This should only be an error
 		// on non-Windows operating systems.
-		if runtime.GOOS != "windows" {
+		if !isWindows {
 			daemon.Unmount(container)
 			driver := daemon.ImageService().StorageDriver()
 			return fmt.Errorf("driver %s is returning inconsistent paths for container %s ('%s' then '%s')",
@@ -1863,16 +1872,19 @@ func (daemon *Daemon) BuilderBackend() builder.Backend {
 }
 
 // RawSysInfo returns *sysinfo.SysInfo .
-func (daemon *Daemon) RawSysInfo() *sysinfo.SysInfo {
+func (daemon *Daemon) RawSysInfo() (*sysinfo.SysInfo, error) {
 	daemon.sysInfoOnce.Do(func() {
 		// We check if sysInfo is not set here, to allow some test to
 		// override the actual sysInfo.
 		if daemon.sysInfo == nil {
-			daemon.sysInfo = getSysInfo(&daemon.config().Config)
+			daemon.sysInfoErr = daemon.runInNetNS(func() error {
+				daemon.sysInfo = getSysInfo(&daemon.config().Config)
+				return nil
+			})
 		}
 	})
 
-	return daemon.sysInfo
+	return daemon.sysInfo, daemon.sysInfoErr
 }
 
 // imageBackend is used to satisfy the [executorpkg.ImageBackend] and

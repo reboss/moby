@@ -9,10 +9,11 @@ permissions:
 
 on:
   pull_request:
-    types: [opened, edited, labeled, unlabeled, synchronize]
+    types: [opened, reopened, edited, synchronize, labeled, unlabeled]
 
 jobs:
   check-labels:
+    if: ${{ github.event.pull_request.state == 'open' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
     steps:
@@ -30,6 +31,7 @@ jobs:
         run: exit 0
 
   check-changelog:
+    if: ${{ github.event.pull_request.state == 'open' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
     env:
@@ -67,7 +69,24 @@ jobs:
           echo "This PR will be included in the release notes with the following note:"
           echo "$desc"
 
+  check-commit-references:
+    if: ${{ github.event.pull_request.state == 'open' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Check GitHub references
+        env:
+          VALIDATE_REPO: ${{ github.server_url }}/${{ github.repository }}.git
+          VALIDATE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: bash hack/validate/pr-gh-references
+
   check-pr-branch:
+    if: ${{ github.event.pull_request.state == 'open' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120 # guardrails timeout for the whole job
     env:

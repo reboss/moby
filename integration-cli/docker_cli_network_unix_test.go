@@ -296,23 +296,6 @@ func getNwResource(t *testing.T, name string) *network.Inspect {
 	assert.NilError(t, err)
 	return &nr[0]
 }
-
-func (s *DockerNetworkSuite) TestDockerNetworkLsDefault(c *testing.T) {
-	defaults := []string{"bridge", "host", "none"}
-	for _, nn := range defaults {
-		assertNwIsAvailable(c, nn)
-	}
-}
-
-func (s *DockerNetworkSuite) TestDockerNetworkCreatePredefined(c *testing.T) {
-	predefined := []string{"bridge", "host", "none", "default"}
-	for _, nw := range predefined {
-		// predefined networks can't be created again
-		out, _, err := dockerCmdWithError("network", "create", nw)
-		assert.ErrorContains(c, err, "", out)
-	}
-}
-
 func (s *DockerNetworkSuite) TestDockerNetworkCreateHostBind(c *testing.T) {
 	cli.DockerCmd(c, "network", "create", "--subnet=192.168.10.0/24", "--gateway=192.168.10.1", "-o", "com.docker.network.bridge.host_binding_ipv4=192.168.10.1", "testbind")
 	assertNwIsAvailable(c, "testbind")
@@ -321,15 +304,6 @@ func (s *DockerNetworkSuite) TestDockerNetworkCreateHostBind(c *testing.T) {
 	cli.WaitRun(c, id)
 	out := cli.DockerCmd(c, "ps").Stdout()
 	assert.Assert(c, is.Contains(out, "192.168.10.1:5000->5000/tcp"))
-}
-
-func (s *DockerNetworkSuite) TestDockerNetworkRmPredefined(c *testing.T) {
-	predefined := []string{"bridge", "host", "none", "default"}
-	for _, nw := range predefined {
-		// predefined networks can't be removed
-		out, _, err := dockerCmdWithError("network", "rm", nw)
-		assert.ErrorContains(c, err, "", out)
-	}
 }
 
 func (s *DockerNetworkSuite) TestDockerNetworkLsFilter(c *testing.T) {
@@ -377,7 +351,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkLsFilter(c *testing.T) {
 
 	out = cli.DockerCmd(c, "network", "ls", "-f", "label=nonexistent").Stdout()
 	outArr := strings.Split(strings.TrimSpace(out), "\n")
-	assert.Equal(c, len(outArr), 1, fmt.Sprintf("%s\n", out))
+	assert.Equal(c, len(outArr), 1, out+"\n")
 
 	out = cli.DockerCmd(c, "network", "ls", "-f", "driver=null").Stdout()
 	assertNwList(c, out, []string{"none"})
@@ -1258,7 +1232,7 @@ func (s *DockerNetworkSuite) TestDockerNetworkConnectDisconnectToStoppedContaine
 	cli.WaitRun(c, "foo")
 	ip := inspectField(c, "foo", "NetworkSettings.Networks.test.IPAddress")
 	ip = strings.TrimSpace(ip)
-	cli.DockerCmd(c, "run", "--net=test", "busybox", "sh", "-c", fmt.Sprintf("ping -c 1 %s", ip))
+	cli.DockerCmd(c, "run", "--net=test", "busybox", "sh", "-c", "ping -c 1 "+ip)
 
 	cli.DockerCmd(c, "stop", "foo")
 

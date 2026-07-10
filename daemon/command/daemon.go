@@ -211,6 +211,12 @@ func (cli *daemonCLI) start(ctx context.Context) (retErr error) {
 
 	httpServer := &http.Server{
 		ReadHeaderTimeout: 5 * time.Minute, // "G112: Potential Slowloris Attack (gosec)"; not a real concern for our use, so setting a long timeout.
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			// Store the connection in context so middleware can access it for peer credentials
+			// Use a custom key instead of http.LocalAddrContextKey because the HTTP stack
+			// overwrites that with the address, losing the connection.
+			return context.WithValue(ctx, middleware.PeerConnKey, c)
+		},
 	}
 	apiShutdownCtx, apiShutdownCancel := context.WithCancel(context.WithoutCancel(ctx))
 	apiShutdownDone := make(chan struct{})
@@ -867,6 +873,12 @@ func initMiddlewares(_ context.Context, s *apiserver.Server, cfg *config.Config,
 		return nil, err
 	}
 	s.UseMiddleware(*vm)
+
+	// Register peer credential middleware for Unix socket connections.
+	// This extracts UID/GID/PID from the connection and adds them to request context.
+	// Required for features like cgroup adoption that need to know the API client's identity.
+	peerCredMiddleware := middleware.NewPeerCredMiddleware()
+	s.UseMiddleware(peerCredMiddleware)
 
 	authzMiddleware := authorization.NewMiddleware(cfg.AuthorizationPlugins, pluginStore)
 	s.UseMiddleware(authzMiddleware)
